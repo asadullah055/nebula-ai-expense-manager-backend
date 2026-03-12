@@ -1,0 +1,69 @@
+import express from "express";
+import { body } from "express-validator";
+import passport from "passport";
+import {
+  getMe,
+  googleCallback,
+  googleTokenLogin,
+  login,
+  logout,
+  signup
+} from "../controllers/authController.js";
+import authMiddleware from "../middleware/authMiddleware.js";
+
+const router = express.Router();
+
+router.post(
+  "/signup",
+  [
+    body("name").trim().isLength({ min: 2 }).withMessage("Name must be at least 2 characters"),
+    body("email").isEmail().withMessage("Valid email is required"),
+    body("password")
+      .isLength({ min: 6 })
+      .withMessage("Password must be at least 6 characters")
+      .matches(/^(?=.*[A-Za-z])(?=.*\d).+$/)
+      .withMessage("Password must contain letters and numbers")
+  ],
+  signup
+);
+
+router.post(
+  "/login",
+  [
+    body("email").isEmail().withMessage("Valid email is required"),
+    body("password").notEmpty().withMessage("Password is required")
+  ],
+  login
+);
+
+router.post(
+  "/google/token",
+  [body("credential").notEmpty().withMessage("Google credential is required")],
+  googleTokenLogin
+);
+
+router.get(
+  "/google",
+  passport.authenticate("google", {
+    scope: ["profile", "email"],
+    session: false
+  })
+);
+
+router.get(
+  "/google/callback",
+  passport.authenticate("google", {
+    failureRedirect: "/api/auth/google/failure",
+    session: false
+  }),
+  googleCallback
+);
+
+router.get("/google/failure", (_req, res) => {
+  return res.status(401).json({ message: "Google authentication failed" });
+});
+
+router.get("/me", authMiddleware, getMe);
+router.get("/logout", logout);
+
+export default router;
