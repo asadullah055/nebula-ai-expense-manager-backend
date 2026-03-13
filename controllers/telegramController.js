@@ -178,17 +178,33 @@ export const telegramWebhook = async (req, res) => {
       }
     }
 
-    const result = await runAgentWorkflow({
-      channel: "telegram",
-      userId: telegramLink.userId,
-      channelUserId: `telegram:${chatId}`,
-      text: inputText,
-      voiceFileId
-    });
+    try {
+      const result = await runAgentWorkflow({
+        channel: "telegram",
+        userId: telegramLink.userId,
+        channelUserId: `telegram:${chatId}`,
+        text: inputText,
+        voiceFileId
+      });
 
-    await sendTelegramMessage(chatId, result.reply);
+      await sendTelegramMessage(chatId, result.reply);
+    } catch (workflowError) {
+      console.error("Telegram workflow error:", workflowError?.message || workflowError);
+      if (workflowError?.stack) {
+        console.error(workflowError.stack);
+      }
+      await sendTelegramMessage(
+        chatId,
+        "I hit a temporary issue while processing that request. Please send it once more."
+      );
+    }
+
     return res.status(200).json({ ok: true });
   } catch (error) {
-    return res.status(500).json({ message: "Telegram webhook error", error: error.message });
+    console.error("Telegram webhook fatal error:", error?.message || error);
+    if (error?.stack) {
+      console.error(error.stack);
+    }
+    return res.status(200).json({ ok: true });
   }
 };

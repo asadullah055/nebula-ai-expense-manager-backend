@@ -1061,8 +1061,22 @@ const handleIncomeSourceIntent = async ({ userId, text, normalizedText, context 
       return `You already have this income source: ${existing.name} (${existing.type}) in ${existing.profile}.`;
     }
 
-    const created = await IncomeSource.create({ userId, name, type, profile, normalizedProfile, normalizedName });
-    return `Done. I added \"${created.name}\" as ${created.type} under ${created.profile}.`;
+    try {
+      const created = await IncomeSource.create({
+        userId,
+        name,
+        type,
+        profile,
+        normalizedProfile,
+        normalizedName
+      });
+      return `Done. I added \"${created.name}\" as ${created.type} under ${created.profile}.`;
+    } catch (error) {
+      if (error?.code === 11000) {
+        return `You already have this income source: ${name} (${type}) in ${profile}.`;
+      }
+      return "I could not create that income category due to a temporary server issue. Please try again.";
+    }
   }
 
   return null;
@@ -1136,8 +1150,22 @@ const handleExpenseCategoryIntent = async ({ userId, text, normalizedText, conte
       return `You already have this expense category: ${existing.name} (${existing.type}) in ${existing.profile}.`;
     }
 
-    const created = await ExpenseCategory.create({ userId, name, type, profile, normalizedProfile, normalizedName });
-    return `Done. I added "${created.name}" as ${created.type} under ${created.profile}.`;
+    try {
+      const created = await ExpenseCategory.create({
+        userId,
+        name,
+        type,
+        profile,
+        normalizedProfile,
+        normalizedName
+      });
+      return `Done. I added "${created.name}" as ${created.type} under ${created.profile}.`;
+    } catch (error) {
+      if (error?.code === 11000) {
+        return `You already have this expense category: ${name} (${type}) in ${profile}.`;
+      }
+      return "I could not create that expense category due to a temporary server issue. Please try again.";
+    }
   }
 
   return null;
