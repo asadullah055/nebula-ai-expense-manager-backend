@@ -117,6 +117,8 @@ const callLlmReply = async ({ text, history, workspaceHint }) => {
     "Keep answers concise (2-5 lines), practical, and context-aware.",
     "Always respond only in English, even if the user writes in another language.",
     "Understand casual natural-language chat and respond conversationally.",
+    "Never claim that you added, updated, or deleted database data in fallback chat mode.",
+    "If a user asks for a data-changing action and execution is uncertain, ask one short clarification question.",
     "Do not show command lists unless asked. Prefer conversational style.",
     "You can mention app actions when useful (list/add company/workspace/income/expense)."
   ].join(" ");
@@ -199,6 +201,17 @@ const toSafeInt = (value, fallback = 0) => {
 const normalizeLocalizedText = (value) => {
   if (!value) return "";
   return value;
+};
+
+const normalizeCommandLikeText = (value) => {
+  if (!value) return "";
+  return value
+    .trim()
+    .replace(/^[,.;:!?()\[\]\s]+|[,.;:!?()\[\]\s]+$/g, "")
+    .replace(/^(please|plz|kindly)\s+/i, "")
+    .replace(/^(can you|could you|would you|will you)\s+/i, "")
+    .replace(/^(please|plz|kindly)\s+/i, "")
+    .trim();
 };
 
 const parseIsoDateText = (value) => {
@@ -364,6 +377,157 @@ const normalizeProfile = (text) => {
   return "";
 };
 
+const escapeRegex = (value = "") => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const inferIncomeSourceNameFromKnownSources = async ({ userId, text, profile, incomeNature }) => {
+  if (!userId || !text) return "";
+
+  const strictFilter = {
+    userId,
+    ...(profile ? { profile } : {}),
+    ...(incomeNature ? { type: incomeNature } : {})
+  };
+
+  let sources = await IncomeSource.find(strictFilter)
+    .select("name normalizedName type profile")
+    .lean();
+
+  if (!sources.length) {
+    sources = await IncomeSource.find({ userId }).select("name normalizedName type profile").lean();
+  }
+
+  if (!sources.length) return "";
+
+  const lowerText = normalizeLocalizedText(text.toLowerCase());
+  const exactWordMatches = sources.filter((item) => {
+    const normalized = (item.normalizedName || "").trim();
+    if (!normalized) return false;
+    const pattern = new RegExp(`\\b${escapeRegex(normalized)}\\b`, "i");
+    return pattern.test(lowerText);
+  });
+
+  const candidates = exactWordMatches.length
+    ? exactWordMatches
+    : sources.filter((item) => lowerText.includes((item.normalizedName || "").trim()));
+
+  if (!candidates.length) return "";
+
+  candidates.sort((a, b) => (b.normalizedName || "").length - (a.normalizedName || "").length);
+  return candidates[0].name || "";
+};
+
+const isNaturalAddIncomeIntent = (text, normalizedText) => {
+  const lower = normalizeLocalizedText((text || "").toLowerCase());
+  const normalized = normalizeLocalizedText((normalizedText || "").toLowerCase());
+
+  if (!lower) return false;
+  if (/\bexpense\b/.test(lower)) return false;
+
+  const hasAmount = /\b[0-9]+(?:,[0-9]{3})*(?:\.\d+)?\b/.test(lower);
+  if (!hasAmount) return false;
+
+  const incomeContext =
+    /\bincome\b/.test(lower) ||
+    /\b(got|received|receive|earned|earning|salary|bonus|rent|freelance|commission|profit|allowance)\b/.test(lower);
+
+  if (!incomeContext) return false;
+
+  const actionCue =
+    /\b(add|record|save|store|log)\b/.test(lower) ||
+    /\b(i got|we got|i received|we received|i earned|we earned)\b/.test(lower);
+
+  if (!actionCue) return false;
+
+  const reportingIntent =
+    /\b(list|show|get|view|summary|total|history|report)\b/.test(normalized) &&
+    !/\badd\b/.test(normalized);
+
+  return !reportingIntent;
+};
+
+const inferExpenseCategoryNameFromKnownCategories = async ({
+  userId,
+  text,
+  profile,
+  expenseType
+}) => {
+  if (!userId || !text) return "";
+
+  const strictFilter = {
+    userId,
+    ...(profile ? { profile } : {}),
+    ...(expenseType ? { type: expenseType } : {})
+  };
+
+  let categories = await ExpenseCategory.find(strictFilter)
+    .select("name normalizedName type profile")
+    .lean();
+
+  if (!categories.length) {
+    categories = await ExpenseCategory.find({ userId })
+      .select("name normalizedName type profile")
+      .lean();
+  }
+
+  if (!categories.length) return "";
+
+  const lowerText = normalizeLocalizedText(text.toLowerCase());
+  const exactWordMatches = categories.filter((item) => {
+    const normalized = (item.normalizedName || "").trim();
+    if (!normalized) return false;
+    const pattern = new RegExp(`\\b${escapeRegex(normalized)}\\b`, "i");
+    return pattern.test(lowerText);
+  });
+
+  const candidates = exactWordMatches.length
+    ? exactWordMatches
+    : categories.filter((item) => lowerText.includes((item.normalizedName || "").trim()));
+
+  if (!candidates.length) return "";
+
+  candidates.sort((a, b) => (b.normalizedName || "").length - (a.normalizedName || "").length);
+  return candidates[0].name || "";
+};
+
+const isNaturalAddExpenseIntent = (text, normalizedText) => {
+  const lower = normalizeLocalizedText((text || "").toLowerCase());
+  const normalized = normalizeLocalizedText((normalizedText || "").toLowerCase());
+
+  if (!lower) return false;
+  if (/\bincome\b/.test(lower)) return false;
+
+  const hasAmount = /\b[0-9]+(?:,[0-9]{3})*(?:\.\d+)?\b/.test(lower);
+  if (!hasAmount) return false;
+
+  const expenseContext =
+    /\bexpense\b/.test(lower) ||
+    /\b(spent|spend|paid|pay|payment|rent|bill|groceries|fuel|food|transport|shopping)\b/.test(lower);
+
+  if (!expenseContext) return false;
+
+  const actionCue =
+    /\b(add|record|save|store|log)\b/.test(lower) ||
+    /\b(i spent|we spent|i paid|we paid)\b/.test(lower);
+
+  if (!actionCue) return false;
+
+  const reportingIntent =
+    /\b(list|show|get|view|summary|total|history|report)\b/.test(normalized) &&
+    !/\badd\b/.test(normalized);
+
+  return !reportingIntent;
+};
+
+const isLikelyMutationRequest = (text) => {
+  const lower = normalizeLocalizedText((text || "").toLowerCase());
+  if (!lower) return false;
+
+  const mutationWord = /\b(add|create|record|save|store|log|update|edit|delete|remove)\b/.test(lower);
+  const domainWord = /\b(income|expense|company|workspace|category|source)\b/.test(lower);
+
+  return mutationWord && domainWord;
+};
+
 const parseDateHint = (text) => {
   if (!text) return "";
   if (/\btoday\b/i.test(text)) {
@@ -399,18 +563,35 @@ const parseWorkspaceHint = (text) => {
   return "";
 };
 
+const parseScaledAmount = (rawAmount) => {
+  const cleaned = String(rawAmount || "")
+    .toLowerCase()
+    .replace(/,/g, "")
+    .replace(/\s+/g, "");
+  const match = cleaned.match(/^([0-9]+(?:\.\d+)?)([km])?$/i);
+  if (!match) return null;
+
+  const base = Number(match[1]);
+  if (!Number.isFinite(base) || base <= 0) return null;
+  const suffix = (match[2] || "").toLowerCase();
+  const multiplier = suffix === "k" ? 1000 : suffix === "m" ? 1000000 : 1;
+  return base * multiplier;
+};
+
 const parseAmountHint = (text) => {
   if (!text) return null;
 
-  const withLabel = text.match(/(?:\bamount\b|\btk\b|\bbdt\b|\busd\b|\$)\s*[:=]?\s*([0-9]+(?:,[0-9]{3})*(?:\.\d+)?)/i);
+  const withLabel = text.match(
+    /(?:\bamount\b|\btk\b|\bbdt\b|\busd\b|\$)\s*[:=]?\s*([0-9]+(?:,[0-9]{3})*(?:\.\d+)?(?:\s*[km])?)/i
+  );
   if (withLabel?.[1]) {
-    const value = Number(withLabel[1].replace(/,/g, ""));
+    const value = parseScaledAmount(withLabel[1]);
     return Number.isFinite(value) && value > 0 ? value : null;
   }
 
-  const plainNumber = text.match(/\b([0-9]+(?:,[0-9]{3})*(?:\.\d+)?)\b/);
+  const plainNumber = text.match(/\b([0-9]+(?:,[0-9]{3})*(?:\.\d+)?(?:\s*[km])?)\b/i);
   if (plainNumber?.[1]) {
-    const value = Number(plainNumber[1].replace(/,/g, ""));
+    const value = parseScaledAmount(plainNumber[1]);
     return Number.isFinite(value) && value > 0 ? value : null;
   }
 
@@ -476,6 +657,7 @@ const extractSourceNameFromIncomePayload = (payload) => {
     .replace(/(?:\bon\b|\bdate\b)\s*[:=]?\s*\d{4}-\d{2}-\d{2}/gi, " ")
     .replace(/\b(?:amount|tk|bdt|usd|\$)\s*[:=]?\s*[0-9]+(?:,[0-9]{3})*(?:\.\d+)?\b/gi, " ")
     .replace(/\b[0-9]+(?:,[0-9]{3})*(?:\.\d+)?\b/g, " ")
+    .replace(/\b(i|we|got|received|receive|earned|earning|please|add|save|store|log|this|that|my)\b/gi, " ")
     .replace(/\b(to|from|for|source|category|income|entry|record|into)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -498,6 +680,7 @@ const extractCategoryNameFromExpensePayload = (payload) => {
     .replace(/(?:\bon\b|\bdate\b)\s*[:=]?\s*\d{4}-\d{2}-\d{2}/gi, " ")
     .replace(/\b(?:amount|tk|bdt|usd|\$)\s*[:=]?\s*[0-9]+(?:,[0-9]{3})*(?:\.\d+)?\b/gi, " ")
     .replace(/\b[0-9]+(?:,[0-9]{3})*(?:\.\d+)?\b/g, " ")
+    .replace(/\b(i|we|spent|spend|paid|pay|please|add|save|store|log|this|that|my)\b/gi, " ")
     .replace(/\b(to|from|for|category|expense|entry|record|into)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -891,16 +1074,18 @@ const handleIncomeEntryIntent = async ({ userId, text, normalizedText }) => {
     return `${periodText}Income entries (showing ${entries.length}):\n${lines.join("\n")}\nTotal: $${total.toFixed(2)}`;
   }
 
+  const strictAddIncomeIntent = /^(add|create|record)\s+income\b/i.test(text);
+  const naturalAddIncomeIntent = isNaturalAddIncomeIntent(text, normalizedText);
   const isAddIncomeIntent =
-    !mentionsSourceOrCategory && /^(add|create|record)\s+income\b/i.test(text);
+    !mentionsSourceOrCategory && (strictAddIncomeIntent || naturalAddIncomeIntent);
 
   if (isAddIncomeIntent) {
     const addMatch = text.match(/^(add|create|record)\s+income(?:\s+entry)?\s+(.+)$/i);
-    if (!addMatch?.[2]) {
+    if (strictAddIncomeIntent && !addMatch?.[2]) {
       return "Please provide income details. Example: add income 50000 salary for personal in facebook workspace";
     }
 
-    const payload = addMatch[2].trim();
+    const payload = addMatch?.[2]?.trim() || text.trim();
     const profile = normalizeProfile(payload);
     const incomeNature = normalizeIncomeType(payload);
     const workspaceHint = parseWorkspaceHint(payload);
@@ -908,14 +1093,22 @@ const handleIncomeEntryIntent = async ({ userId, text, normalizedText }) => {
 
     const payloadWithoutDate = payload
       .replace(/(?:\bon\b|\bdate\b)\s*[:=]?\s*\d{4}-\d{2}-\d{2}/gi, " ")
-      .replace(/\btoday\b/gi, " ");
+      .replace(/\btoday\b/gi, " ")
+      .replace(/\b(?:add|create|record|save|store|log)\b/gi, " ")
+      .replace(/\b(?:this|that|my)\b/gi, " ");
 
     const amount = parseAmountHint(payloadWithoutDate);
     if (!amount) {
       return "Please provide a valid income amount. Example: add income 50000 salary";
     }
 
-    const sourceName = extractSourceNameFromIncomePayload(payloadWithoutDate);
+    const inferredSource = await inferIncomeSourceNameFromKnownSources({
+      userId,
+      text: payloadWithoutDate,
+      profile,
+      incomeNature
+    });
+    const sourceName = inferredSource || extractSourceNameFromIncomePayload(payloadWithoutDate);
     if (!sourceName || sourceName.length < 2) {
       return "Please provide the income category name. Example: add income 50000 salary";
     }
@@ -1070,16 +1263,18 @@ const handleExpenseEntryIntent = async ({ userId, text, normalizedText }) => {
     return `${periodText}Expense entries (showing ${entries.length}):\n${lines.join("\n")}\nTotal: $${total.toFixed(2)}`;
   }
 
+  const strictAddExpenseIntent = /^(add|create|record)\s+expense\b/i.test(text);
+  const naturalAddExpenseIntent = isNaturalAddExpenseIntent(text, normalizedText);
   const isAddExpenseIntent =
-    !mentionsSourceOrCategory && /^(add|create|record)\s+expense\b/i.test(text);
+    !mentionsSourceOrCategory && (strictAddExpenseIntent || naturalAddExpenseIntent);
 
   if (isAddExpenseIntent) {
     const addMatch = text.match(/^(add|create|record)\s+expense(?:\s+entry)?\s+(.+)$/i);
-    if (!addMatch?.[2]) {
+    if (strictAddExpenseIntent && !addMatch?.[2]) {
       return "Please provide expense details. Example: add expense 1200 rent for personal in facebook workspace";
     }
 
-    const payload = addMatch[2].trim();
+    const payload = addMatch?.[2]?.trim() || text.trim();
     const profile = normalizeProfile(payload);
     const expenseType = normalizeExpenseType(payload);
     const workspaceHint = parseWorkspaceHint(payload);
@@ -1087,14 +1282,22 @@ const handleExpenseEntryIntent = async ({ userId, text, normalizedText }) => {
 
     const payloadWithoutDate = payload
       .replace(/(?:\bon\b|\bdate\b)\s*[:=]?\s*\d{4}-\d{2}-\d{2}/gi, " ")
-      .replace(/\btoday\b/gi, " ");
+      .replace(/\btoday\b/gi, " ")
+      .replace(/\b(?:add|create|record|save|store|log)\b/gi, " ")
+      .replace(/\b(?:this|that|my)\b/gi, " ");
 
     const amount = parseAmountHint(payloadWithoutDate);
     if (!amount) {
       return "Please provide a valid expense amount. Example: add expense 1200 rent";
     }
 
-    const categoryName = extractCategoryNameFromExpensePayload(payloadWithoutDate);
+    const inferredCategory = await inferExpenseCategoryNameFromKnownCategories({
+      userId,
+      text: payloadWithoutDate,
+      profile,
+      expenseType
+    });
+    const categoryName = inferredCategory || extractCategoryNameFromExpensePayload(payloadWithoutDate);
     if (!categoryName || categoryName.length < 2) {
       return "Please provide the expense category name. Example: add expense 1200 rent";
     }
@@ -1261,7 +1464,8 @@ const handleFinancialSummaryIntent = async ({ userId, text }) => {
 
 export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, voiceFileId }) => {
   const normalizedText = (text || "").trim();
-  const lowerText = normalizedText.toLowerCase();
+  const parserText = normalizeCommandLikeText(normalizedText);
+  const lowerText = parserText.toLowerCase();
 
   await persistMessage({
     userId,
@@ -1275,19 +1479,19 @@ export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, v
 
   let reply = "";
 
-  if (!normalizedText && !voiceFileId) {
+  if (!parserText && !voiceFileId) {
     reply = "I did not receive any message. Please send text or voice input.";
-  } else if (hasBengaliText(normalizedText)) {
+  } else if (hasBengaliText(parserText)) {
     reply = "Please send your message in English. I respond in English only.";
-  } else if (!normalizedText && voiceFileId) {
+  } else if (!parserText && voiceFileId) {
     reply =
       "Voice message received. I can reply now, and you can later attach a speech-to-text provider to process full voice transcripts.";
-  } else if (lowerText === "help" || normalizedText === "/help") {
+  } else if (lowerText === "help" || parserText === "/help") {
     reply = helpText;
   } else {
     const workspaceReply = await handleWorkspaceIntent({
       userId,
-      text: normalizedText,
+      text: parserText,
       normalizedText: lowerText
     });
 
@@ -1295,7 +1499,7 @@ export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, v
       ? null
       : await handleIncomeSourceIntent({
           userId,
-          text: normalizedText,
+          text: parserText,
           normalizedText: lowerText
         });
 
@@ -1303,14 +1507,14 @@ export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, v
       ? null
       : await handleFinancialSummaryIntent({
           userId,
-          text: normalizedText
+          text: parserText
         });
 
     const incomeEntryReply = workspaceReply || incomeSourceReply || financialSummaryReply
       ? null
       : await handleIncomeEntryIntent({
           userId,
-          text: normalizedText,
+          text: parserText,
           normalizedText: lowerText
         });
 
@@ -1318,7 +1522,7 @@ export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, v
       ? null
       : await handleExpenseCategoryIntent({
           userId,
-          text: normalizedText,
+          text: parserText,
           normalizedText: lowerText
         });
 
@@ -1326,7 +1530,7 @@ export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, v
       ? null
       : await handleExpenseEntryIntent({
           userId,
-          text: normalizedText,
+          text: parserText,
           normalizedText: lowerText
         });
 
@@ -1343,28 +1547,33 @@ export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, v
     } else if (expenseEntryReply) {
       reply = expenseEntryReply;
     } else {
-      const workspaces = userId ? await Workspace.find({ userId }).select("name").limit(10).lean() : [];
-      const incomeSources = userId
-        ? await IncomeSource.find({ userId }).select("name type profile").limit(10).lean()
-        : [];
-      const expenseCategories = userId
-        ? await ExpenseCategory.find({ userId }).select("name type profile").limit(10).lean()
-        : [];
-      const workspaceHint = workspaces.length
-        ? `User workspaces: ${workspaces.map((item) => item.name).join(", ")}.`
-        : "User has no workspace data yet.";
-      const incomeHint = incomeSources.length
-        ? `Income categories: ${incomeSources.map((item) => `${item.name}(${item.type}, ${item.profile})`).join(", ")}.`
-        : "User has no income category yet.";
-      const expenseHint = expenseCategories.length
-        ? `Expense categories: ${expenseCategories.map((item) => `${item.name}(${item.type}, ${item.profile})`).join(", ")}.`
-        : "User has no expense category yet.";
-      const history = await getRecentConversation({ userId, channelUserId });
-      reply = await callLlmReply({
-        text: normalizedText,
-        history,
-        workspaceHint: `${workspaceHint} ${incomeHint} ${expenseHint}`
-      });
+      if (isLikelyMutationRequest(parserText)) {
+        reply =
+          "I could not safely execute that data change from this sentence. Please resend with amount + category clearly, for example: add income 3000 bonus for personal in facebook workspace.";
+      } else {
+        const workspaces = userId ? await Workspace.find({ userId }).select("name").limit(10).lean() : [];
+        const incomeSources = userId
+          ? await IncomeSource.find({ userId }).select("name type profile").limit(10).lean()
+          : [];
+        const expenseCategories = userId
+          ? await ExpenseCategory.find({ userId }).select("name type profile").limit(10).lean()
+          : [];
+        const workspaceHint = workspaces.length
+          ? `User workspaces: ${workspaces.map((item) => item.name).join(", ")}.`
+          : "User has no workspace data yet.";
+        const incomeHint = incomeSources.length
+          ? `Income categories: ${incomeSources.map((item) => `${item.name}(${item.type}, ${item.profile})`).join(", ")}.`
+          : "User has no income category yet.";
+        const expenseHint = expenseCategories.length
+          ? `Expense categories: ${expenseCategories.map((item) => `${item.name}(${item.type}, ${item.profile})`).join(", ")}.`
+          : "User has no expense category yet.";
+        const history = await getRecentConversation({ userId, channelUserId });
+        reply = await callLlmReply({
+          text: parserText,
+          history,
+          workspaceHint: `${workspaceHint} ${incomeHint} ${expenseHint}`
+        });
+      }
     }
   }
 
