@@ -77,14 +77,20 @@ export const login = async (req, res) => {
 };
 
 export const googleCallback = async (req, res) => {
+  const frontendUrl = (process.env.FRONTEND_URL || "").replace(/\/$/, "");
+  const successRedirect = frontendUrl ? `${frontendUrl}/oauth-success` : "/oauth-success";
+  const failureRedirect = frontendUrl
+    ? `${frontendUrl}/login?error=google_auth_failed`
+    : "/login?error=google_auth_failed";
+
   try {
     const token = createAccessToken(req.user._id.toString());
     setAuthCookie(res, token);
 
     // Frontend reads this route only once to set in-memory auth state.
-    return res.redirect(`${process.env.FRONTEND_URL}/oauth-success`);
+    return res.redirect(successRedirect);
   } catch (error) {
-    return res.redirect(`${process.env.FRONTEND_URL}/login?error=google_auth_failed`);
+    return res.redirect(failureRedirect);
   }
 };
 
