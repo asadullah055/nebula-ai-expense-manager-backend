@@ -28,6 +28,20 @@ const telegramLinkSchema = new mongoose.Schema(
     linkedAt: {
       type: Date,
       default: null
+    },
+    activeWorkspaceName: {
+      type: String,
+      default: null,
+      trim: true
+    },
+    activeProfile: {
+      type: String,
+      enum: ["Personal", "Company", null],
+      default: null
+    },
+    pendingWorkspaceSwitch: {
+      type: Boolean,
+      default: false
     }
   },
   { timestamps: true }

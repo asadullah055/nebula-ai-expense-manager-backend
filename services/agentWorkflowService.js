@@ -3,6 +3,7 @@ import ExpenseCategory from "../models/ExpenseCategory.js";
 import ExpenseEntry from "../models/ExpenseEntry.js";
 import IncomeEntry from "../models/IncomeEntry.js";
 import IncomeSource from "../models/IncomeSource.js";
+import TelegramLink from "../models/TelegramLink.js";
 import Workspace from "../models/Workspace.js";
 import { ensureRecurringEntriesForScope } from "../controllers/incomeEntryController.js";
 
@@ -101,6 +102,35 @@ const quickHumanReply = (text) => {
 };
 
 const hasBengaliText = (value) => /[\u0980-\u09FF]/.test(value || "");
+
+const getAgentContext = async (userId) => {
+  if (!userId) {
+    return {
+      activeWorkspaceName: "",
+      activeProfile: "",
+      pendingWorkspaceSwitch: false
+    };
+  }
+
+  const row = await TelegramLink.findOne({ userId })
+    .select("activeWorkspaceName activeProfile pendingWorkspaceSwitch")
+    .lean();
+
+  return {
+    activeWorkspaceName: row?.activeWorkspaceName || "",
+    activeProfile: row?.activeProfile || "",
+    pendingWorkspaceSwitch: Boolean(row?.pendingWorkspaceSwitch)
+  };
+};
+
+const updateAgentContext = async (userId, updates = {}) => {
+  if (!userId) return;
+  await TelegramLink.findOneAndUpdate(
+    { userId },
+    { $set: updates },
+    { new: true }
+  );
+};
 
 const callLlmReply = async ({ text, history, workspaceHint }) => {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -563,6 +593,18 @@ const parseWorkspaceHint = (text) => {
   return "";
 };
 
+const findWorkspaceByHint = (workspaces, hint) => {
+  const normalizedHint = (hint || "").trim().toLowerCase();
+  if (!normalizedHint) return null;
+
+  const exact = workspaces.find(
+    (item) => item.normalizedName === normalizedHint || item.name.toLowerCase() === normalizedHint
+  );
+  if (exact) return exact;
+
+  return workspaces.find((item) => item.name.toLowerCase().includes(normalizedHint)) || null;
+};
+
 const parseScaledAmount = (rawAmount) => {
   const cleaned = String(rawAmount || "")
     .toLowerCase()
@@ -637,6 +679,7 @@ const parseExpenseAddPayload = (rawPayload) => {
     .replace(/\bvariable(?:\s+expense)?\b/i, "")
     .replace(/\bfixed\b/i, "")
     .replace(/\birregular\b/i, "")
+    .replace(/\bcost\b/i, "")
     .trim();
 
   return { name: withoutAsType || payload, type: typeFromWhole };
@@ -699,17 +742,9 @@ const resolveWorkspaceForIncome = async ({ userId, workspaceHint, profile }) => 
   }
 
   if (workspaceHint) {
-    const hint = workspaceHint.trim().toLowerCase();
-    const exact = workspaces.find(
-      (item) => item.normalizedName === hint || item.name.toLowerCase() === hint
-    );
-    if (exact) {
-      return { workspaceName: exact.name, error: "" };
-    }
-
-    const partial = workspaces.find((item) => item.name.toLowerCase().includes(hint));
-    if (partial) {
-      return { workspaceName: partial.name, error: "" };
+    const matched = findWorkspaceByHint(workspaces, workspaceHint);
+    if (matched) {
+      return { workspaceName: matched.name, error: "" };
     }
 
     return {
@@ -847,10 +882,12 @@ const resolveExpenseCategoryForEntry = async ({ userId, categoryName, profile, e
   return { category: candidates[0], error: "" };
 };
 
-const handleWorkspaceIntent = async ({ userId, text, normalizedText }) => {
+const handleWorkspaceIntent = async ({ userId, text, normalizedText, context }) => {
   if (!userId) {
     return "Your Telegram is not linked yet. Please generate a link code from Settings, then send /link <code> here. I will take care of the rest.";
   }
+
+  const workspaces = await Workspace.find({ userId }).sort({ createdAt: 1 }).select("name normalizedName").lean();
 
   const isListIntent =
     normalizedText === "list company" ||
@@ -859,13 +896,83 @@ const handleWorkspaceIntent = async ({ userId, text, normalizedText }) => {
     normalizedText === "list workspaces";
 
   if (isListIntent) {
-    const workspaces = await Workspace.find({ userId }).sort({ createdAt: 1 }).select("name");
     if (!workspaces.length) {
       return "You do not have any company yet. Send 'add company <name>' and I will create it for you.";
     }
 
     const lines = workspaces.map((workspace, index) => `${index + 1}. ${workspace.name}`);
     return `Your companies:\n${lines.join("\n")}`;
+  }
+
+  const isCurrentWorkspaceIntent =
+    /^(my\s+)?current\s+(workspace|company|profile)\b/i.test(text) ||
+    /^which\s+(workspace|company|profile)\b/i.test(text);
+  if (isCurrentWorkspaceIntent) {
+    const current = context?.activeWorkspaceName
+      ? findWorkspaceByHint(workspaces, context.activeWorkspaceName)
+      : workspaces[0] || null;
+
+    if (!current) {
+      return "You do not have any workspace yet. Add one first using: add company <name>.";
+    }
+
+    const profileLabel = context?.activeProfile ? ` (${context.activeProfile} profile)` : "";
+    return `You're currently in the ${current.name} workspace${profileLabel}. What would you like to do next?`;
+  }
+
+  const isCompanyProfileSwitch =
+    /\b(switch|change|use)\b.*\bcompany\b.*\bprofile\b/i.test(text) ||
+    /\bprofile\b.*\bcompany\b/i.test(text);
+  if (isCompanyProfileSwitch) {
+    await updateAgentContext(userId, {
+      activeProfile: "Company",
+      pendingWorkspaceSwitch: true
+    });
+    return "Which company profile would you like to switch to? Just let me know the name!";
+  }
+
+  const isPersonalProfileSwitch =
+    /\b(switch|change|use)\b.*\bpersonal\b.*\bprofile\b/i.test(text) ||
+    /\bprofile\b.*\bpersonal\b/i.test(text);
+  if (isPersonalProfileSwitch) {
+    const personalWorkspace = workspaces.find((item) => item.name.toLowerCase().includes("personal")) || workspaces[0];
+    await updateAgentContext(userId, {
+      activeProfile: "Personal",
+      activeWorkspaceName: personalWorkspace?.name || null,
+      pendingWorkspaceSwitch: false
+    });
+    if (!personalWorkspace) {
+      return "Personal profile is active now, but you do not have any workspace yet.";
+    }
+    return `Done. Personal profile is active now. You're in ${personalWorkspace.name} workspace.`;
+  }
+
+  const switchWithNameMatch = text.match(
+    /^(?:switch|change|use)\s+(?:to\s+)?([a-z0-9][a-z0-9 _-]{1,79})(?:\s+(?:workspace|company))?$/i
+  );
+  const pendingSwitch = Boolean(context?.pendingWorkspaceSwitch);
+  const directNameCandidate = pendingSwitch ? text.trim() : "";
+  const switchNameCandidate = switchWithNameMatch?.[1]?.trim() || directNameCandidate;
+
+  if (switchNameCandidate) {
+    const matched = findWorkspaceByHint(workspaces, switchNameCandidate);
+    if (!matched) {
+      if (pendingSwitch) {
+        return `I could not find workspace "${switchNameCandidate}". Please send the exact company name.`;
+      }
+    } else {
+      const profileFromText = normalizeProfile(text);
+      const nextProfile = profileFromText || context?.activeProfile || null;
+
+      await updateAgentContext(userId, {
+        activeWorkspaceName: matched.name,
+        activeProfile: nextProfile,
+        pendingWorkspaceSwitch: false
+      });
+
+      const profileLabel = nextProfile ? ` (${nextProfile} profile)` : "";
+      return `You're now switched to the ${matched.name} workspace${profileLabel}. How can I assist you further?`;
+    }
   }
 
   const addMatch = text.match(/^(add|create)\s+(company|workspace)\s+(.+)$/i);
@@ -884,7 +991,7 @@ const handleWorkspaceIntent = async ({ userId, text, normalizedText }) => {
   return null;
 };
 
-const handleIncomeSourceIntent = async ({ userId, text, normalizedText }) => {
+const handleIncomeSourceIntent = async ({ userId, text, normalizedText, context }) => {
   if (!userId) {
     return "Your Telegram is not linked yet. Please generate a link code from Settings, then send /link <code> here.";
   }
@@ -896,7 +1003,7 @@ const handleIncomeSourceIntent = async ({ userId, text, normalizedText }) => {
     normalizedText === "list income categories";
 
   if (isListSourceIntent) {
-    const profileFilter = normalizeProfile(text);
+    const profileFilter = normalizeProfile(text) || context?.activeProfile || "";
     const typeFilter = normalizeIncomeType(text);
     const sources = await IncomeSource.find({
       userId,
@@ -917,8 +1024,18 @@ const handleIncomeSourceIntent = async ({ userId, text, normalizedText }) => {
   }
 
   const addSourceMatch = text.match(/^(add|create)\s+income\s+(source|category)\s+(.+)$/i);
-  if (addSourceMatch) {
-    const rawPayload = addSourceMatch[3].trim();
+  const naturalAddSourceIntent =
+    /\b(add|create)\b/i.test(text) &&
+    /\bincome\b/i.test(text) &&
+    /\b(source|category)\b/i.test(text);
+  if (addSourceMatch || naturalAddSourceIntent) {
+    const rawPayload = addSourceMatch?.[3]?.trim() ||
+      text
+        .replace(/\b(add|create)\b/gi, " ")
+        .replace(/\bincome\b/gi, " ")
+        .replace(/\b(source|category)\b/gi, " ")
+        .replace(/\s+/g, " ")
+        .trim();
     const profileMatch = rawPayload.match(/\bfor\s+(personal|company)\b/i);
     const payloadWithoutProfile = profileMatch
       ? rawPayload.replace(/\bfor\s+(personal|company)\b/i, "").trim()
@@ -931,7 +1048,7 @@ const handleIncomeSourceIntent = async ({ userId, text, normalizedText }) => {
       ? profileMatch[1].toLowerCase() === "company"
         ? "Company"
         : "Personal"
-      : "Personal";
+      : context?.activeProfile || "Personal";
 
     if (!name || name.length < 2) {
       return "Please provide a valid income source name. Example: add income source Salary as Recurring Income for Personal";
@@ -951,7 +1068,7 @@ const handleIncomeSourceIntent = async ({ userId, text, normalizedText }) => {
   return null;
 };
 
-const handleExpenseCategoryIntent = async ({ userId, text, normalizedText }) => {
+const handleExpenseCategoryIntent = async ({ userId, text, normalizedText, context }) => {
   if (!userId) {
     return "Your Telegram is not linked yet. Please generate a link code from Settings, then send /link <code> here.";
   }
@@ -961,7 +1078,7 @@ const handleExpenseCategoryIntent = async ({ userId, text, normalizedText }) => 
     normalizedText === "expense categories";
 
   if (isListCategoryIntent) {
-    const profileFilter = normalizeProfile(text);
+    const profileFilter = normalizeProfile(text) || context?.activeProfile || "";
     const typeFilter = normalizeExpenseType(text);
     const categories = await ExpenseCategory.find({
       userId,
@@ -982,8 +1099,18 @@ const handleExpenseCategoryIntent = async ({ userId, text, normalizedText }) => 
   }
 
   const addCategoryMatch = text.match(/^(add|create)\s+expense\s+(source|category)\s+(.+)$/i);
-  if (addCategoryMatch) {
-    const rawPayload = addCategoryMatch[3].trim();
+  const naturalAddCategoryIntent =
+    /\b(add|create)\b/i.test(text) &&
+    /\bexpense\b/i.test(text) &&
+    /\b(source|category)\b/i.test(text);
+  if (addCategoryMatch || naturalAddCategoryIntent) {
+    const rawPayload = addCategoryMatch?.[3]?.trim() ||
+      text
+        .replace(/\b(add|create)\b/gi, " ")
+        .replace(/\bexpense\b/gi, " ")
+        .replace(/\b(source|category)\b/gi, " ")
+        .replace(/\s+/g, " ")
+        .trim();
     const profileMatch = rawPayload.match(/\bfor\s+(personal|company)\b/i);
     const payloadWithoutProfile = profileMatch
       ? rawPayload.replace(/\bfor\s+(personal|company)\b/i, "").trim()
@@ -996,7 +1123,7 @@ const handleExpenseCategoryIntent = async ({ userId, text, normalizedText }) => 
       ? profileMatch[1].toLowerCase() === "company"
         ? "Company"
         : "Personal"
-      : "Personal";
+      : context?.activeProfile || "Personal";
 
     if (!name || name.length < 2) {
       return "Please provide a valid expense category name. Example: add expense category Rent as Recurring Expense for Personal";
@@ -1016,7 +1143,7 @@ const handleExpenseCategoryIntent = async ({ userId, text, normalizedText }) => 
   return null;
 };
 
-const handleIncomeEntryIntent = async ({ userId, text, normalizedText }) => {
+const handleIncomeEntryIntent = async ({ userId, text, normalizedText, context }) => {
   if (!userId) {
     return "Your Telegram is not linked yet. Please generate a link code from Settings, then send /link <code> here.";
   }
@@ -1027,8 +1154,8 @@ const handleIncomeEntryIntent = async ({ userId, text, normalizedText }) => {
     !mentionsSourceOrCategory && isIncomeListIntent(text, normalizedText);
 
   if (isListIncomeIntent) {
-    const profile = normalizeProfile(text);
-    const workspaceHint = parseWorkspaceHint(text);
+    const profile = normalizeProfile(text) || context?.activeProfile || "";
+    const workspaceHint = parseWorkspaceHint(text) || context?.activeWorkspaceName || "";
     const parsedRange = parseIncomeDateRange(text);
 
     let workspaceName = "";
@@ -1086,9 +1213,9 @@ const handleIncomeEntryIntent = async ({ userId, text, normalizedText }) => {
     }
 
     const payload = addMatch?.[2]?.trim() || text.trim();
-    const profile = normalizeProfile(payload);
+    const profile = normalizeProfile(payload) || context?.activeProfile || "";
     const incomeNature = normalizeIncomeType(payload);
-    const workspaceHint = parseWorkspaceHint(payload);
+    const workspaceHint = parseWorkspaceHint(payload) || context?.activeWorkspaceName || "";
     const entryDate = parseDateHint(payload) || new Date().toISOString().slice(0, 10);
 
     const payloadWithoutDate = payload
@@ -1182,6 +1309,12 @@ const handleIncomeEntryIntent = async ({ userId, text, normalizedText }) => {
       });
     }
 
+    await updateAgentContext(userId, {
+      activeWorkspaceName: entry.workspaceName,
+      activeProfile: entry.profile,
+      pendingWorkspaceSwitch: false
+    });
+
     return `Done. Added $${Number(entry.amount).toFixed(2)} for \"${entry.incomeSourceName}\" (${entry.incomeNature}) in ${entry.workspaceName} (${entry.profile}) on ${toIsoDate(entry.entryDate)}.`;
   }
 
@@ -1211,7 +1344,7 @@ const isExpenseListIntent = (text, normalizedText) => {
   return !addIntent;
 };
 
-const handleExpenseEntryIntent = async ({ userId, text, normalizedText }) => {
+const handleExpenseEntryIntent = async ({ userId, text, normalizedText, context }) => {
   if (!userId) {
     return "Your Telegram is not linked yet. Please generate a link code from Settings, then send /link <code> here.";
   }
@@ -1222,8 +1355,8 @@ const handleExpenseEntryIntent = async ({ userId, text, normalizedText }) => {
     !mentionsSourceOrCategory && isExpenseListIntent(text, normalizedText);
 
   if (isListExpenseIntent) {
-    const profile = normalizeProfile(text);
-    const workspaceHint = parseWorkspaceHint(text);
+    const profile = normalizeProfile(text) || context?.activeProfile || "";
+    const workspaceHint = parseWorkspaceHint(text) || context?.activeWorkspaceName || "";
     const parsedRange = parseIncomeDateRange(text);
 
     let workspaceName = "";
@@ -1275,9 +1408,9 @@ const handleExpenseEntryIntent = async ({ userId, text, normalizedText }) => {
     }
 
     const payload = addMatch?.[2]?.trim() || text.trim();
-    const profile = normalizeProfile(payload);
+    const profile = normalizeProfile(payload) || context?.activeProfile || "";
     const expenseType = normalizeExpenseType(payload);
-    const workspaceHint = parseWorkspaceHint(payload);
+    const workspaceHint = parseWorkspaceHint(payload) || context?.activeWorkspaceName || "";
     const entryDate = parseDateHint(payload) || new Date().toISOString().slice(0, 10);
 
     const payloadWithoutDate = payload
@@ -1372,6 +1505,12 @@ const handleExpenseEntryIntent = async ({ userId, text, normalizedText }) => {
       });
     }
 
+    await updateAgentContext(userId, {
+      activeWorkspaceName: entry.workspaceName,
+      activeProfile: entry.profile,
+      pendingWorkspaceSwitch: false
+    });
+
     return `Done. Added $${Number(entry.amount).toFixed(2)} expense for "${entry.category}" (${entry.expenseType}) in ${entry.workspaceName} (${entry.profile}) on ${toIsoDate(entry.entryDate)}.`;
   }
 
@@ -1393,7 +1532,7 @@ const isFinancialSummaryIntent = (text) => {
   return false;
 };
 
-const handleFinancialSummaryIntent = async ({ userId, text }) => {
+const handleFinancialSummaryIntent = async ({ userId, text, context }) => {
   if (!userId) {
     return "Your Telegram is not linked yet. Please generate a link code from Settings, then send /link <code> here.";
   }
@@ -1402,8 +1541,8 @@ const handleFinancialSummaryIntent = async ({ userId, text }) => {
     return null;
   }
 
-  const profile = normalizeProfile(text);
-  const workspaceHint = parseWorkspaceHint(text);
+  const profile = normalizeProfile(text) || context?.activeProfile || "";
+  const workspaceHint = parseWorkspaceHint(text) || context?.activeWorkspaceName || "";
   const parsedRange = parseIncomeDateRange(text);
 
   let workspaceName = "";
@@ -1466,6 +1605,7 @@ export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, v
   const normalizedText = (text || "").trim();
   const parserText = normalizeCommandLikeText(normalizedText);
   const lowerText = parserText.toLowerCase();
+  const context = await getAgentContext(userId);
 
   await persistMessage({
     userId,
@@ -1492,7 +1632,8 @@ export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, v
     const workspaceReply = await handleWorkspaceIntent({
       userId,
       text: parserText,
-      normalizedText: lowerText
+      normalizedText: lowerText,
+      context
     });
 
     const incomeSourceReply = workspaceReply
@@ -1500,14 +1641,16 @@ export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, v
       : await handleIncomeSourceIntent({
           userId,
           text: parserText,
-          normalizedText: lowerText
+          normalizedText: lowerText,
+          context
         });
 
     const financialSummaryReply = workspaceReply || incomeSourceReply
       ? null
       : await handleFinancialSummaryIntent({
           userId,
-          text: parserText
+          text: parserText,
+          context
         });
 
     const incomeEntryReply = workspaceReply || incomeSourceReply || financialSummaryReply
@@ -1515,7 +1658,8 @@ export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, v
       : await handleIncomeEntryIntent({
           userId,
           text: parserText,
-          normalizedText: lowerText
+          normalizedText: lowerText,
+          context
         });
 
     const expenseCategoryReply = workspaceReply || incomeSourceReply || incomeEntryReply
@@ -1523,7 +1667,8 @@ export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, v
       : await handleExpenseCategoryIntent({
           userId,
           text: parserText,
-          normalizedText: lowerText
+          normalizedText: lowerText,
+          context
         });
 
     const expenseEntryReply = workspaceReply || incomeSourceReply || incomeEntryReply || expenseCategoryReply
@@ -1531,7 +1676,8 @@ export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, v
       : await handleExpenseEntryIntent({
           userId,
           text: parserText,
-          normalizedText: lowerText
+          normalizedText: lowerText,
+          context
         });
 
     if (workspaceReply) {

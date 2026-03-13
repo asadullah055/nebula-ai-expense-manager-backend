@@ -43,6 +43,8 @@ export const getTelegramLinkStatus = async (req, res) => {
       return res.status(200).json({
         linked: false,
         chatId: null,
+        activeWorkspaceName: null,
+        activeProfile: null,
         pendingCode: null,
         pendingCodeExpiresAt: null,
         botUsername,
@@ -59,6 +61,8 @@ export const getTelegramLinkStatus = async (req, res) => {
       linked: Boolean(link.chatId),
       chatId: link.chatId,
       linkedAt: link.linkedAt,
+      activeWorkspaceName: link.activeWorkspaceName || null,
+      activeProfile: link.activeProfile || null,
       pendingCode: link.linkCode,
       pendingCodeExpiresAt: link.linkCodeExpiresAt,
       botUsername,
@@ -78,6 +82,9 @@ export const unlinkTelegram = async (req, res) => {
 
     link.chatId = null;
     link.linkedAt = null;
+    link.activeWorkspaceName = null;
+    link.activeProfile = null;
+    link.pendingWorkspaceSwitch = false;
     await link.save();
 
     return res.status(200).json({ message: "Telegram unlinked successfully" });
