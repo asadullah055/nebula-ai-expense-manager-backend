@@ -1604,11 +1604,33 @@ const isFinancialSummaryIntent = (text) => {
   if (/\b(total\s+income|income\s+total)\b/.test(lower) && /\b(total\s+expense|expense\s+total)\b/.test(lower)) {
     return true;
   }
+  if (/\b(total\s+balance|net\s+balance|balance)\b/.test(lower)) {
+    return true;
+  }
+  if (/\b(total\s+income|income\s+total|total\s+expense|expense\s+total)\b/.test(lower)) {
+    return true;
+  }
   if (/\b(total\s+income|total\s+expense|total\s+balance|balance)\b/.test(lower) && /\b(summary|overview|report|show|get|give)\b/.test(lower)) {
     return true;
   }
 
   return false;
+};
+
+const resolveFinancialMetricIntent = (text) => {
+  const lower = normalizeLocalizedText((text || "").toLowerCase());
+  const asksIncome = /\b(total\s+income|income\s+total)\b/.test(lower);
+  const asksExpense = /\b(total\s+expense|expense\s+total|total\s+expenses|expenses\s+total)\b/.test(lower);
+  const asksBalance = /\b(total\s+balance|net\s+balance|balance)\b/.test(lower);
+
+  const metricCount = Number(asksIncome) + Number(asksExpense) + Number(asksBalance);
+  if (metricCount === 1) {
+    if (asksIncome) return "income";
+    if (asksExpense) return "expense";
+    return "balance";
+  }
+
+  return "all";
 };
 
 const handleFinancialSummaryIntent = async ({ userId, text, context }) => {
@@ -1663,8 +1685,31 @@ const handleFinancialSummaryIntent = async ({ userId, text, context }) => {
   const totalExpense = Number(expenseAgg?.[0]?.total || 0);
   const expenseCount = Number(expenseAgg?.[0]?.count || 0);
   const balance = totalIncome - totalExpense;
-
+  const metricIntent = resolveFinancialMetricIntent(text);
   const scopeText = buildSummaryScopeText({ workspaceName, profile, parsedRange });
+
+  if (metricIntent === "income") {
+    return `Your total income ${scopeText} is ${formatCurrency(totalIncome)} from ${toCountLabel(incomeCount, "entry", "entries")}.`;
+  }
+
+  if (metricIntent === "expense") {
+    return `Your total expense ${scopeText} is ${formatCurrency(totalExpense)} from ${toCountLabel(expenseCount, "entry", "entries")}.`;
+  }
+
+  if (metricIntent === "balance") {
+    const balanceTone =
+      balance > 0
+        ? "You are currently in a positive balance."
+        : balance < 0
+          ? "Right now your expenses are higher than your income."
+          : "Right now your income and expense are balanced.";
+
+    return [
+      `Your net balance ${scopeText} is ${formatCurrency(balance)}.`,
+      balanceTone
+    ].join("\n");
+  }
+
   const balanceTone =
     balance > 0
       ? "You are in a positive balance."
