@@ -981,30 +981,53 @@ const handleWorkspaceIntent = async ({ userId, text, normalizedText, context }) 
   }
 
   const isCompanyProfileSwitch =
-    /\b(switch|change|use)\b.*\bcompany\b.*\bprofile\b/i.test(text) ||
-    /\bprofile\b.*\bcompany\b/i.test(text);
+    /\b(switch|change|use)\b[\s\S]*\b(company|business|professional)\b(?:[\s\S]*\b(profile|account)\b)?/i.test(text) ||
+    /\b(company|business|professional)\b[\s\S]*\b(profile|account)\b/i.test(text);
   if (isCompanyProfileSwitch) {
+    if (!workspaces.length) {
+      return "You do not have any workspace yet. Add one first using: add company <name>.";
+    }
+
+    if (workspaces.length === 1) {
+      await updateAgentContext(userId, {
+        activeProfile: "Company",
+        activeWorkspaceName: workspaces[0].name,
+        pendingWorkspaceSwitch: false
+      });
+      return `Done. Company profile is active now. You're in ${workspaces[0].name} workspace.`;
+    }
+
     await updateAgentContext(userId, {
       activeProfile: "Company",
       pendingWorkspaceSwitch: true
     });
-    return "Which company profile would you like to switch to? Just let me know the name!";
+    const options = workspaces.map((item) => `"${item.name}"`).join(" or ");
+    return `Which company account would you like to switch to? Your options are ${options}.`;
   }
 
   const isPersonalProfileSwitch =
-    /\b(switch|change|use)\b.*\bpersonal\b.*\bprofile\b/i.test(text) ||
-    /\bprofile\b.*\bpersonal\b/i.test(text);
+    /\b(switch|change|use)\b[\s\S]*\b(personal|private)\b(?:[\s\S]*\b(profile|account)\b)?/i.test(text) ||
+    /\b(personal|private)\b[\s\S]*\b(profile|account)\b/i.test(text);
   if (isPersonalProfileSwitch) {
-    const personalWorkspace = workspaces.find((item) => item.name.toLowerCase().includes("personal")) || workspaces[0];
+    if (!workspaces.length) {
+      return "You do not have any workspace yet. Add one first using: add company <name>.";
+    }
+
+    if (workspaces.length === 1) {
+      await updateAgentContext(userId, {
+        activeProfile: "Personal",
+        activeWorkspaceName: workspaces[0].name,
+        pendingWorkspaceSwitch: false
+      });
+      return `Done. Personal profile is active now. You're in ${workspaces[0].name} workspace.`;
+    }
+
     await updateAgentContext(userId, {
       activeProfile: "Personal",
-      activeWorkspaceName: personalWorkspace?.name || null,
-      pendingWorkspaceSwitch: false
+      pendingWorkspaceSwitch: true
     });
-    if (!personalWorkspace) {
-      return "Personal profile is active now, but you do not have any workspace yet.";
-    }
-    return `Done. Personal profile is active now. You're in ${personalWorkspace.name} workspace.`;
+    const options = workspaces.map((item) => `"${item.name}"`).join(" or ");
+    return `Which personal account would you like to switch to? Your options are ${options}.`;
   }
 
   const switchWithNameMatch = text.match(
