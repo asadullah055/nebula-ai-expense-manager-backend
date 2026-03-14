@@ -142,15 +142,14 @@ const callLlmReply = async ({ text, history, workspaceHint }) => {
 
   const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
   const systemPrompt = [
-    "You are Nebula AI, a warm and natural assistant inside an expense manager.",
-    "Reply like a real human teammate, not like a bot.",
-    "Keep answers concise (2-5 lines), practical, and context-aware.",
-    "Always respond only in English, even if the user writes in another language.",
-    "Understand casual natural-language chat and respond conversationally.",
-    "Never claim that you added, updated, or deleted database data in fallback chat mode.",
-    "If a user asks for a data-changing action and execution is uncertain, ask one short clarification question.",
-    "Do not show command lists unless asked. Prefer conversational style.",
-    "You can mention app actions when useful (list/add company/workspace/income/expense)."
+    "You are Nebula AI, a professional assistant for an expense manager.",
+    "Respond naturally in clear English, with a concise and confident tone.",
+    "Never fabricate numbers, transactions, balances, or actions.",
+    "Never claim database execution unless confirmed by backend execution result.",
+    "If information is missing or uncertain, say that briefly and ask one concrete clarification.",
+    "For fallback chat mode, do not pretend to have performed create/update/delete/switch actions.",
+    "Do not provide long command lists unless the user explicitly asks for examples.",
+    "Prefer short practical answers (1-4 lines) and keep focus on the user's intent."
   ].join(" ");
 
   const conversation = history
@@ -177,8 +176,8 @@ const callLlmReply = async ({ text, history, workspaceHint }) => {
       body: JSON.stringify({
         model,
         input,
-        temperature: 0.6,
-        max_output_tokens: 280
+        temperature: 0.2,
+        max_output_tokens: 220
       })
     });
 
@@ -585,6 +584,24 @@ const isLikelyMutationRequest = (text) => {
   const domainWord = /\b(income|expense|company|workspace|category|source)\b/.test(lower);
 
   return mutationWord && domainWord;
+};
+
+const isFinanceDomainRequest = (text) => {
+  const lower = normalizeLocalizedText((text || "").toLowerCase());
+  if (!lower) return false;
+
+  const domainWord =
+    /\b(income|expense|balance|financial|money|summary|total|company|workspace|profile|category|source|recurring|variable)\b/.test(
+      lower
+    );
+  if (!domainWord) return false;
+
+  const intentWord =
+    /\b(list|show|get|view|add|create|record|save|store|log|update|edit|delete|remove|switch|change|use|summary|total|history|report|last|past|from|between|today|month|date)\b/.test(
+      lower
+    );
+
+  return intentWord;
 };
 
 const isAffirmativeOnlyText = (text) => {
@@ -1921,23 +1938,26 @@ export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, v
         if (isAffirmativeOnlyText(parserText) && assistantAskedForMutationConfirmation(history)) {
           reply =
             "Thanks for confirming. To avoid mistakes, please send the full command in one line. Example: add expense category labour cost as Variable Expense.";
+        } else if (isFinanceDomainRequest(parserText)) {
+          reply =
+            "I could not confidently map that finance request to a safe backend action. Please resend with clear fields like amount, type, category, profile, and workspace.";
         } else {
           const workspaces = userId ? await Workspace.find({ userId }).select("name").limit(10).lean() : [];
-        const incomeSources = userId
-          ? await IncomeSource.find({ userId }).select("name type profile").limit(10).lean()
-          : [];
-        const expenseCategories = userId
-          ? await ExpenseCategory.find({ userId }).select("name type profile").limit(10).lean()
-          : [];
-        const workspaceHint = workspaces.length
-          ? `User workspaces: ${workspaces.map((item) => item.name).join(", ")}.`
-          : "User has no workspace data yet.";
-        const incomeHint = incomeSources.length
-          ? `Income categories: ${incomeSources.map((item) => `${item.name}(${item.type}, ${item.profile})`).join(", ")}.`
-          : "User has no income category yet.";
-        const expenseHint = expenseCategories.length
-          ? `Expense categories: ${expenseCategories.map((item) => `${item.name}(${item.type}, ${item.profile})`).join(", ")}.`
-          : "User has no expense category yet.";
+          const incomeSources = userId
+            ? await IncomeSource.find({ userId }).select("name type profile").limit(10).lean()
+            : [];
+          const expenseCategories = userId
+            ? await ExpenseCategory.find({ userId }).select("name type profile").limit(10).lean()
+            : [];
+          const workspaceHint = workspaces.length
+            ? `User workspaces: ${workspaces.map((item) => item.name).join(", ")}.`
+            : "User has no workspace data yet.";
+          const incomeHint = incomeSources.length
+            ? `Income categories: ${incomeSources.map((item) => `${item.name}(${item.type}, ${item.profile})`).join(", ")}.`
+            : "User has no income category yet.";
+          const expenseHint = expenseCategories.length
+            ? `Expense categories: ${expenseCategories.map((item) => `${item.name}(${item.type}, ${item.profile})`).join(", ")}.`
+            : "User has no expense category yet.";
           reply = await callLlmReply({
             text: parserText,
             history,
