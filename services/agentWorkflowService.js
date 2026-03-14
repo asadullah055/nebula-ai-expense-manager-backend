@@ -213,6 +213,35 @@ const toIsoDate = (dateValue) => {
   return date.toISOString().slice(0, 10);
 };
 
+const formatCurrency = (value) => `$${Number(value || 0).toFixed(2)}`;
+
+const formatHumanDate = (dateValue) => {
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC"
+  });
+};
+
+const toCountLabel = (value, singular, plural) => {
+  const count = Number(value || 0);
+  return `${count} ${count === 1 ? singular : plural}`;
+};
+
+const buildSummaryScopeText = ({ workspaceName, profile, parsedRange }) => {
+  const parts = [];
+
+  if (workspaceName) parts.push(`${workspaceName} workspace`);
+  if (profile) parts.push(`${profile} profile`);
+  if (parsedRange?.label) parts.push(parsedRange.label);
+
+  if (!parts.length) return "for all available data";
+  return `for ${parts.join(", ")}`;
+};
+
 const startOfUtcDay = (dateValue) => {
   const date = new Date(dateValue);
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
@@ -1216,17 +1245,28 @@ const handleIncomeEntryIntent = async ({ userId, text, normalizedText, context }
       .lean();
 
     if (!entries.length) {
-      return "No income entries found for this filter.";
+      return "I checked that filter, but I could not find any income entries.";
     }
 
     const total = entries.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-    const lines = entries.map(
+    const shownEntries = entries.slice(0, 10);
+    const lines = shownEntries.map(
       (item, index) =>
-        `${index + 1}. ${item.incomeSourceName} | ${item.incomeNature} | $${Number(item.amount).toFixed(2)} | ${item.profile} | ${item.workspaceName} | ${toIsoDate(item.entryDate)}`
+        `${index + 1}) ${item.incomeSourceName} - ${item.incomeNature}, ${formatCurrency(item.amount)} on ${formatHumanDate(item.entryDate)} (${item.profile}, ${item.workspaceName})`
     );
-    const periodText = parsedRange ? `Period: ${parsedRange.label}\n` : "";
+    const hiddenCount = Math.max(0, entries.length - shownEntries.length);
+    const scopeText = buildSummaryScopeText({ workspaceName, profile, parsedRange });
 
-    return `${periodText}Income entries (showing ${entries.length}):\n${lines.join("\n")}\nTotal: $${total.toFixed(2)}`;
+    return [
+      `Here is your income summary ${scopeText}.`,
+      `I found ${toCountLabel(entries.length, "entry", "entries")} with a total of ${formatCurrency(total)}.`,
+      "Latest items:",
+      ...lines,
+      hiddenCount > 0 ? `...and ${hiddenCount} more entries.` : "",
+      "If you want, I can also break this down by category."
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   const strictAddIncomeIntent = /^(add|create|record)\s+income\b/i.test(text);
@@ -1411,17 +1451,28 @@ const handleExpenseEntryIntent = async ({ userId, text, normalizedText, context 
       .lean();
 
     if (!entries.length) {
-      return "No expense entries found for this filter.";
+      return "I checked that filter, but I could not find any expense entries.";
     }
 
     const total = entries.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-    const lines = entries.map(
+    const shownEntries = entries.slice(0, 10);
+    const lines = shownEntries.map(
       (item, index) =>
-        `${index + 1}. ${item.category} | ${item.expenseType} | $${Number(item.amount).toFixed(2)} | ${item.profile} | ${item.workspaceName} | ${toIsoDate(item.entryDate)}`
+        `${index + 1}) ${item.category} - ${item.expenseType}, ${formatCurrency(item.amount)} on ${formatHumanDate(item.entryDate)} (${item.profile}, ${item.workspaceName})`
     );
-    const periodText = parsedRange ? `Period: ${parsedRange.label}\n` : "";
+    const hiddenCount = Math.max(0, entries.length - shownEntries.length);
+    const scopeText = buildSummaryScopeText({ workspaceName, profile, parsedRange });
 
-    return `${periodText}Expense entries (showing ${entries.length}):\n${lines.join("\n")}\nTotal: $${total.toFixed(2)}`;
+    return [
+      `Here is your expense summary ${scopeText}.`,
+      `I found ${toCountLabel(entries.length, "entry", "entries")} with a total of ${formatCurrency(total)}.`,
+      "Latest items:",
+      ...lines,
+      hiddenCount > 0 ? `...and ${hiddenCount} more entries.` : "",
+      "If you want, I can group this by category or date."
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   const strictAddExpenseIntent = /^(add|create|record)\s+expense\b/i.test(text);
@@ -1613,19 +1664,20 @@ const handleFinancialSummaryIntent = async ({ userId, text, context }) => {
   const expenseCount = Number(expenseAgg?.[0]?.count || 0);
   const balance = totalIncome - totalExpense;
 
-  const scope = [
-    workspaceName ? `workspace: ${workspaceName}` : "",
-    profile ? `profile: ${profile}` : "",
-    parsedRange ? `period: ${parsedRange.label}` : "period: all time"
-  ]
-    .filter(Boolean)
-    .join(" | ");
+  const scopeText = buildSummaryScopeText({ workspaceName, profile, parsedRange });
+  const balanceTone =
+    balance > 0
+      ? "You are in a positive balance."
+      : balance < 0
+        ? "Expenses are currently higher than income."
+        : "Income and expense are currently balanced.";
 
   return [
-    `Financial summary (${scope})`,
-    `- Total Income: $${totalIncome.toFixed(2)} (${incomeCount} entries)`,
-    `- Total Expense: $${totalExpense.toFixed(2)} (${expenseCount} entries)`,
-    `- Net Balance: $${balance.toFixed(2)}`
+    `Here is your financial snapshot ${scopeText}:`,
+    `Income: ${formatCurrency(totalIncome)} from ${toCountLabel(incomeCount, "entry", "entries")}.`,
+    `Expense: ${formatCurrency(totalExpense)} from ${toCountLabel(expenseCount, "entry", "entries")}.`,
+    `Net balance: ${formatCurrency(balance)}.`,
+    balanceTone
   ].join("\n");
 };
 
