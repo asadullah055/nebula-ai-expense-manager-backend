@@ -587,6 +587,37 @@ const isLikelyMutationRequest = (text) => {
   return mutationWord && domainWord;
 };
 
+const isAffirmativeOnlyText = (text) => {
+  const lower = normalizeLocalizedText((text || "").toLowerCase()).replace(/[^\w\s]/g, "").trim();
+  if (!lower) return false;
+
+  return /^(yes|yeah|yep|ok|okay|sure|confirm|go ahead|do it|please do)$/.test(lower);
+};
+
+const assistantAskedForMutationConfirmation = (history = []) => {
+  const recentAssistant = [...history]
+    .reverse()
+    .find((item) => item?.role === "assistant" && item?.text);
+  if (!recentAssistant) return false;
+
+  const lower = normalizeLocalizedText(recentAssistant.text.toLowerCase());
+  const asksConfirm = /\b(confirm|would you like me to|do you want me to|should i)\b/.test(lower);
+  const mutationContext = /\b(add|create|record|save|update|delete|remove)\b/.test(lower);
+  const domainContext = /\b(income|expense|category|source|workspace|company)\b/.test(lower);
+
+  return asksConfirm && mutationContext && domainContext;
+};
+
+const hasUnsafeExecutionClaim = (reply) => {
+  const lower = normalizeLocalizedText((reply || "").toLowerCase());
+  if (!lower) return false;
+
+  return (
+    /\b(i have|i've|i just|done|successfully)\b[\s\S]{0,48}\b(added|recorded|created|updated|deleted|removed|switched|linked|unlinked)\b/.test(lower) ||
+    /\byour .* (is|are) now\b/.test(lower)
+  );
+};
+
 const parseDateHint = (text) => {
   if (!text) return "";
   if (/\btoday\b/i.test(text)) {
@@ -1600,7 +1631,7 @@ const isFinancialSummaryIntent = (text) => {
   const lower = normalizeLocalizedText((text || "").toLowerCase());
   if (!lower) return false;
 
-  if (/^(financial|finance|money)\s+summary\b/.test(lower)) return true;
+  if (/\b(financial|finance|money)\s+summary\b/.test(lower)) return true;
   if (/\b(total\s+income|income\s+total)\b/.test(lower) && /\b(total\s+expense|expense\s+total)\b/.test(lower)) {
     return true;
   }
@@ -1615,6 +1646,18 @@ const isFinancialSummaryIntent = (text) => {
   }
 
   return false;
+};
+
+const wantsCombinedIncomeAndFinancialSummary = (text) => {
+  const lower = normalizeLocalizedText((text || "").toLowerCase());
+  if (!lower) return false;
+
+  const hasIncomeSummary =
+    /\bincome\s+summary\b/.test(lower) || (/\bincome\b/.test(lower) && /\bsummary\b/.test(lower));
+  const hasFinancialSummary = /\b(financial|finance|money)\s+summary\b/.test(lower);
+  const isMutation = /\b(add|create|record|save|store|log|update|edit|delete|remove)\b/.test(lower);
+
+  return hasIncomeSummary && hasFinancialSummary && !isMutation;
 };
 
 const resolveFinancialMetricIntent = (text) => {
@@ -1754,6 +1797,31 @@ export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, v
   } else if (lowerText === "help" || parserText === "/help") {
     reply = helpText;
   } else {
+    const combinedSummaryIntent = wantsCombinedIncomeAndFinancialSummary(parserText);
+    if (combinedSummaryIntent) {
+      const [incomeSummaryReply, financialSummaryReply] = await Promise.all([
+        handleIncomeEntryIntent({
+          userId,
+          text: parserText,
+          normalizedText: lowerText,
+          context
+        }),
+        handleFinancialSummaryIntent({
+          userId,
+          text: parserText,
+          context
+        })
+      ]);
+
+      if (incomeSummaryReply && financialSummaryReply) {
+        reply = `${incomeSummaryReply}\n\n${financialSummaryReply}`;
+      } else {
+        reply =
+          incomeSummaryReply ||
+          financialSummaryReply ||
+          "I could not generate that combined summary. Please send: income summary, or financial summary.";
+      }
+    } else {
     const workspaceReply = await handleWorkspaceIntent({
       userId,
       text: parserText,
@@ -1805,6 +1873,10 @@ export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, v
           context
         });
 
+    const mutationHandled = Boolean(
+      incomeSourceReply || incomeEntryReply || expenseCategoryReply || expenseEntryReply
+    );
+
     if (workspaceReply) {
       reply = workspaceReply;
     } else if (incomeSourceReply) {
@@ -1822,7 +1894,12 @@ export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, v
         reply =
           "I could not safely execute that data change from this sentence. Please resend with amount + category clearly, for example: add income 3000 bonus for personal in facebook workspace.";
       } else {
-        const workspaces = userId ? await Workspace.find({ userId }).select("name").limit(10).lean() : [];
+        const history = await getRecentConversation({ userId, channelUserId });
+        if (isAffirmativeOnlyText(parserText) && assistantAskedForMutationConfirmation(history)) {
+          reply =
+            "Thanks for confirming. To avoid mistakes, please send the full command in one line. Example: add expense category labour cost as Variable Expense.";
+        } else {
+          const workspaces = userId ? await Workspace.find({ userId }).select("name").limit(10).lean() : [];
         const incomeSources = userId
           ? await IncomeSource.find({ userId }).select("name type profile").limit(10).lean()
           : [];
@@ -1838,13 +1915,19 @@ export const runAgentWorkflow = async ({ channel, userId, channelUserId, text, v
         const expenseHint = expenseCategories.length
           ? `Expense categories: ${expenseCategories.map((item) => `${item.name}(${item.type}, ${item.profile})`).join(", ")}.`
           : "User has no expense category yet.";
-        const history = await getRecentConversation({ userId, channelUserId });
-        reply = await callLlmReply({
-          text: parserText,
-          history,
-          workspaceHint: `${workspaceHint} ${incomeHint} ${expenseHint}`
-        });
+          reply = await callLlmReply({
+            text: parserText,
+            history,
+            workspaceHint: `${workspaceHint} ${incomeHint} ${expenseHint}`
+          });
+
+          if (!mutationHandled && hasUnsafeExecutionClaim(reply)) {
+            reply =
+              "I have not executed any database change from that message yet. Please send the action in one clear command with amount, type, and category.";
+          }
+        }
       }
+    }
     }
   }
 
