@@ -185,6 +185,7 @@ export const googleTokenLogin = async (req, res) => {
 
 export const logout = (req, res) => {
   clearAuthCookie(res);
+  res.set("Cache-Control", "no-store");
   return res.status(200).json({ message: "Logged out" });
 };
 
