@@ -8,6 +8,12 @@ const incomeSourceSchema = new mongoose.Schema(
       required: true,
       index: true
     },
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Workspace",
+      default: null,
+      index: true
+    },
     type: {
       type: String,
       enum: ["Recurring Income", "Variable Income"],
@@ -40,7 +46,7 @@ const incomeSourceSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-incomeSourceSchema.index({ userId: 1, normalizedProfile: 1, normalizedName: 1, type: 1 }, { unique: true });
+incomeSourceSchema.index({ userId: 1, workspaceId: 1, normalizedProfile: 1, normalizedName: 1, type: 1 });
 
 const IncomeSource = mongoose.model("IncomeSource", incomeSourceSchema);
 

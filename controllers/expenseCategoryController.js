@@ -1,12 +1,24 @@
 import { validationResult } from "express-validator";
 import ExpenseCategory from "../models/ExpenseCategory.js";
+import Workspace from "../models/Workspace.js";
 
 export const listExpenseCategories = async (req, res) => {
+  const workspaceId = (req.query.workspaceId || "").trim();
   const profile = (req.query.profile || "").trim();
   const type = (req.query.type || "").trim();
 
   try {
+    if (!workspaceId) {
+      return res.status(400).json({ message: "workspaceId is required" });
+    }
+
+    const workspace = await Workspace.findOne({ _id: workspaceId, userId: req.userId }).select("_id");
+    if (!workspace) {
+      return res.status(404).json({ message: "Workspace not found" });
+    }
+
     const filter = { userId: req.userId };
+    filter.workspaceId = workspace._id;
     if (profile) filter.profile = profile;
     if (type) filter.type = type;
 
@@ -26,6 +38,7 @@ export const createExpenseCategory = async (req, res) => {
     return res.status(400).json({ errors: errors.array() });
   }
 
+  const workspaceId = req.body.workspaceId;
   const name = req.body.name.trim();
   const profile = req.body.profile.trim();
   const type = req.body.type;
@@ -33,13 +46,25 @@ export const createExpenseCategory = async (req, res) => {
   const normalizedProfile = profile.toLowerCase();
 
   try {
-    const existing = await ExpenseCategory.findOne({ userId: req.userId, normalizedName, normalizedProfile, type });
+    const workspace = await Workspace.findOne({ _id: workspaceId, userId: req.userId }).select("_id");
+    if (!workspace) {
+      return res.status(404).json({ message: "Workspace not found" });
+    }
+
+    const existing = await ExpenseCategory.findOne({
+      userId: req.userId,
+      workspaceId: workspace._id,
+      normalizedName,
+      normalizedProfile,
+      type
+    });
     if (existing) {
       return res.status(409).json({ message: "Expense category already exists for this profile and type" });
     }
 
     const expenseCategory = await ExpenseCategory.create({
       userId: req.userId,
+      workspaceId: workspace._id,
       type,
       name,
       profile,

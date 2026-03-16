@@ -34,6 +34,12 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: null
     },
+    companyDescription: {
+      type: String,
+      trim: true,
+      maxlength: 500,
+      default: ""
+    },
     provider: {
       type: String,
       enum: ["local", "google"],

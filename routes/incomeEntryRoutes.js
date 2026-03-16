@@ -10,7 +10,7 @@ router.post(
   "/",
   authMiddleware,
   [
-    body("workspaceName").trim().isLength({ min: 2 }).withMessage("Workspace is required"),
+    body("workspaceId").isMongoId().withMessage("Workspace is required"),
     body("profile").isIn(["Personal", "Company"]).withMessage("Profile must be Personal or Company"),
     body("incomeSourceId").isMongoId().withMessage("Income category is required"),
     body("incomeNature")

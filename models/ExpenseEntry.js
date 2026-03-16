@@ -8,6 +8,12 @@ const expenseEntrySchema = new mongoose.Schema(
       required: true,
       index: true
     },
+    workspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Workspace",
+      default: null,
+      index: true
+    },
     workspaceName: {
       type: String,
       required: true,
@@ -56,10 +62,10 @@ const expenseEntrySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-expenseEntrySchema.index({ userId: 1, workspaceName: 1, entryDate: -1 });
+expenseEntrySchema.index({ userId: 1, workspaceId: 1, entryDate: -1 });
 expenseEntrySchema.index({ userId: 1, normalizedCategory: 1 });
 expenseEntrySchema.index(
-  { userId: 1, workspaceName: 1, profile: 1, expenseCategoryId: 1, monthKey: 1 },
+  { userId: 1, workspaceId: 1, profile: 1, expenseCategoryId: 1, monthKey: 1 },
   {
     unique: true,
     partialFilterExpression: {

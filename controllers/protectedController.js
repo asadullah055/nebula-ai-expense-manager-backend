@@ -1,5 +1,7 @@
 import ExpenseEntry from "../models/ExpenseEntry.js";
 import IncomeEntry from "../models/IncomeEntry.js";
+import Workspace from "../models/Workspace.js";
+import { ensureRecurringExpenseEntriesForScope } from "./expenseEntryController.js";
 import { ensureRecurringEntriesForScope } from "./incomeEntryController.js";
 
 const startOfUtcDay = (dateValue) => {
@@ -25,18 +27,47 @@ const groupByLabel = (rows, labelKey, valueKey) => {
 };
 
 export const getDashboardData = async (req, res) => {
+  const workspaceId = (req.query.workspaceId || "").trim();
   const workspaceName = (req.query.workspace || "").trim();
   const profile = (req.query.profile || "").trim();
 
   try {
+    if (!workspaceId && !workspaceName) {
+      return res.status(400).json({ message: "workspaceId is required" });
+    }
+
+    let resolvedWorkspaceName = workspaceName;
+    if (workspaceId) {
+      const workspace = await Workspace.findOne({ _id: workspaceId, userId: req.userId }).select("_id name");
+      if (!workspace) {
+        return res.status(404).json({ message: "Workspace not found" });
+      }
+      resolvedWorkspaceName = workspace.name;
+    }
+
     await ensureRecurringEntriesForScope({
       userId: req.userId,
-      workspaceName: workspaceName || undefined,
+      workspaceId: workspaceId || undefined,
+      workspaceName: resolvedWorkspaceName || undefined,
+      profile: profile || undefined
+    });
+    await ensureRecurringExpenseEntriesForScope({
+      userId: req.userId,
+      workspaceId: workspaceId || undefined,
+      workspaceName: resolvedWorkspaceName || undefined,
       profile: profile || undefined
     });
 
     const filter = { userId: req.userId };
-    if (workspaceName) filter.workspaceName = workspaceName;
+    if (workspaceId) {
+      filter.$or = [
+        { workspaceId },
+        { workspaceId: null, workspaceName: resolvedWorkspaceName },
+        { workspaceId: { $exists: false }, workspaceName: resolvedWorkspaceName }
+      ];
+    } else if (workspaceName) {
+      filter.workspaceName = workspaceName;
+    }
     if (profile) filter.profile = profile;
 
     const [incomeRowsRaw, expenseRowsRaw] = await Promise.all([

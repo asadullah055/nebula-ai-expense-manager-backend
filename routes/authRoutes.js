@@ -7,7 +7,8 @@ import {
   googleTokenLogin,
   login,
   logout,
-  signup
+  signup,
+  updateProfile
 } from "../controllers/authController.js";
 import authMiddleware from "../middleware/authMiddleware.js";
 
@@ -64,6 +65,30 @@ router.get("/google/failure", (_req, res) => {
 });
 
 router.get("/me", authMiddleware, getMe);
+router.patch(
+  "/profile",
+  authMiddleware,
+  [
+    body("name")
+      .optional()
+      .isString()
+      .withMessage("Name must be a string")
+      .trim()
+      .isLength({ min: 2, max: 60 })
+      .withMessage("Name must be between 2 and 60 characters"),
+    body("companyDescription")
+      .optional()
+      .isString()
+      .withMessage("Company description must be a string")
+      .isLength({ max: 500 })
+      .withMessage("Company description must be at most 500 characters"),
+    body("avatar")
+      .optional({ nullable: true })
+      .custom((value) => value === null || typeof value === "string")
+      .withMessage("Avatar must be a string or null")
+  ],
+  updateProfile
+);
 router.get("/logout", logout);
 
 export default router;

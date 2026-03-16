@@ -1,11 +1,18 @@
 import express from "express";
 import { body } from "express-validator";
 import authMiddleware from "../middleware/authMiddleware.js";
-import { createWorkspace, listWorkspaces } from "../controllers/workspaceController.js";
+import {
+  createWorkspace,
+  getWorkspaceProfile,
+  listWorkspaces,
+  updateWorkspaceProfile
+} from "../controllers/workspaceController.js";
 
 const router = express.Router();
 
 router.get("/", authMiddleware, listWorkspaces);
+router.get("/profile", authMiddleware, getWorkspaceProfile);
+router.patch("/profile", authMiddleware, updateWorkspaceProfile);
 router.post(
   "/",
   authMiddleware,
@@ -14,4 +21,3 @@ router.post(
 );
 
 export default router;
-
