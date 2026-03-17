@@ -14,6 +14,14 @@ const addUtcDays = (dateValue, days) => {
   return new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate() + days));
 };
 
+const isSameUtcMonth = (dateValue, compareDate) => {
+  const date = new Date(dateValue);
+  return (
+    date.getUTCFullYear() === compareDate.getUTCFullYear() &&
+    date.getUTCMonth() === compareDate.getUTCMonth()
+  );
+};
+
 const groupByLabel = (rows, labelKey, valueKey) => {
   const grouped = rows.reduce((acc, row) => {
     const label = row[labelKey] || "Uncategorized";
@@ -37,12 +45,15 @@ export const getDashboardData = async (req, res) => {
     }
 
     let resolvedWorkspaceName = workspaceName;
+    let resolvedWorkspace = null;
     if (workspaceId) {
-      const workspace = await Workspace.findOne({ _id: workspaceId, userId: req.userId }).select("_id name");
-      if (!workspace) {
+      resolvedWorkspace = await Workspace.findOne({ _id: workspaceId, userId: req.userId }).select(
+        "_id name monthlyExpenseLimitPersonal monthlyExpenseLimitCompany"
+      );
+      if (!resolvedWorkspace) {
         return res.status(404).json({ message: "Workspace not found" });
       }
-      resolvedWorkspaceName = workspace.name;
+      resolvedWorkspaceName = resolvedWorkspace.name;
     }
 
     await ensureRecurringEntriesForScope({
@@ -103,6 +114,34 @@ export const getDashboardData = async (req, res) => {
     const totalExpenses = expenseRows.reduce((sum, item) => sum + item.amount, 0);
     const totalBalance = totalIncome - totalExpenses;
 
+    const currentMonthIncome = incomeRows
+      .filter((item) => isSameUtcMonth(item.dateObj, now))
+      .reduce((sum, item) => sum + item.amount, 0);
+    const currentMonthExpense = expenseRows
+      .filter((item) => isSameUtcMonth(item.dateObj, now))
+      .reduce((sum, item) => sum + item.amount, 0);
+
+    let spendingUsagePercent = 0;
+    if (currentMonthIncome > 0) {
+      spendingUsagePercent = (currentMonthExpense / currentMonthIncome) * 100;
+    } else if (currentMonthExpense > 0) {
+      spendingUsagePercent = 100;
+    }
+
+    let spendingStatus = "normal";
+    if (spendingUsagePercent >= 100 || (currentMonthIncome <= 0 && currentMonthExpense > 0)) {
+      spendingStatus = "alert";
+    } else if (spendingUsagePercent >= 80) {
+      spendingStatus = "warning";
+    }
+
+    const remainingAmount = currentMonthIncome - currentMonthExpense;
+    const monthlyExpenseLimit = resolvedWorkspace
+      ? profile === "Personal"
+        ? Number(resolvedWorkspace.monthlyExpenseLimitPersonal || 0)
+        : Number(resolvedWorkspace.monthlyExpenseLimitCompany || 0)
+      : 0;
+
     const recentTransactions = [
       ...incomeRows.map((item) => ({
         id: `income-${item._id}`,
@@ -131,6 +170,14 @@ export const getDashboardData = async (req, res) => {
         totalIncome,
         totalExpenses,
         totalBalance
+      },
+      spendingControl: {
+        monthlyExpenseLimit,
+        currentMonthIncome,
+        currentMonthExpense,
+        usagePercent: Number(spendingUsagePercent.toFixed(2)),
+        status: spendingStatus,
+        remainingAmount
       },
       income: {
         last60Total: incomeLast60.reduce((sum, item) => sum + item.amount, 0),

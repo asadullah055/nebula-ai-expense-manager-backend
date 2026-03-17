@@ -46,7 +46,9 @@ export const listWorkspaces = async (req, res) => {
   try {
     const workspaces = await Workspace.find({ userId: req.userId })
       .sort({ createdAt: 1 })
-      .select("_id name profileName avatar companyDescription createdAt");
+      .select(
+        "_id name profileName avatar companyDescription monthlyExpenseLimitPersonal monthlyExpenseLimitCompany createdAt"
+      );
 
     return res.status(200).json({ workspaces });
   } catch (error) {
@@ -85,6 +87,8 @@ export const createWorkspace = async (req, res) => {
         profileName: workspace.profileName || workspace.name,
         avatar: workspace.avatar || null,
         companyDescription: workspace.companyDescription || "",
+        monthlyExpenseLimitPersonal: Number(workspace.monthlyExpenseLimitPersonal || 0),
+        monthlyExpenseLimitCompany: Number(workspace.monthlyExpenseLimitCompany || 0),
         createdAt: workspace.createdAt
       }
     });
@@ -95,6 +99,8 @@ export const createWorkspace = async (req, res) => {
 
 export const getWorkspaceProfile = async (req, res) => {
   const workspaceId = (req.query.workspaceId || "").trim();
+  const profileRaw = (req.query.profile || "").trim();
+  const profile = profileRaw === "Personal" ? "Personal" : "Company";
 
   try {
     if (!workspaceId) {
@@ -105,7 +111,7 @@ export const getWorkspaceProfile = async (req, res) => {
     }
 
     const workspace = await Workspace.findOne({ _id: workspaceId, userId: req.userId }).select(
-      "_id name profileName avatar companyDescription"
+      "_id name profileName avatar companyDescription monthlyExpenseLimitPersonal monthlyExpenseLimitCompany"
     );
 
     if (!workspace) {
@@ -118,7 +124,14 @@ export const getWorkspaceProfile = async (req, res) => {
         name: workspace.name,
         profileName: workspace.profileName || workspace.name,
         avatar: workspace.avatar || null,
-        companyDescription: workspace.companyDescription || ""
+        companyDescription: workspace.companyDescription || "",
+        profile,
+        monthlyExpenseLimit:
+          profile === "Personal"
+            ? Number(workspace.monthlyExpenseLimitPersonal || 0)
+            : Number(workspace.monthlyExpenseLimitCompany || 0),
+        monthlyExpenseLimitPersonal: Number(workspace.monthlyExpenseLimitPersonal || 0),
+        monthlyExpenseLimitCompany: Number(workspace.monthlyExpenseLimitCompany || 0)
       }
     });
   } catch (error) {
@@ -134,6 +147,10 @@ export const updateWorkspaceProfile = async (req, res) => {
     const workspaceId = String(normalizeValue(fields.workspaceId) || "").trim();
     const profileNameRaw = String(normalizeValue(fields.profileName) || "").trim();
     const companyDescriptionRaw = String(normalizeValue(fields.companyDescription) || "").trim();
+    const profileRaw = String(normalizeValue(fields.profile) || "").trim();
+    const profile = profileRaw === "Personal" ? "Personal" : "Company";
+    const monthlyExpenseLimitRaw = String(normalizeValue(fields.monthlyExpenseLimit) || "").trim();
+    const monthlyExpenseLimitValue = monthlyExpenseLimitRaw === "" ? 0 : Number(monthlyExpenseLimitRaw);
     avatarFile = resolveSingleFile(files.avatar);
 
     if (!workspaceId) {
@@ -149,6 +166,9 @@ export const updateWorkspaceProfile = async (req, res) => {
 
     if (companyDescriptionRaw.length > 500) {
       return res.status(400).json({ message: "Company description must be at most 500 characters" });
+    }
+    if (!Number.isFinite(monthlyExpenseLimitValue) || monthlyExpenseLimitValue < 0) {
+      return res.status(400).json({ message: "Monthly expense limit must be a valid positive amount" });
     }
 
     const workspace = await Workspace.findOne({ _id: workspaceId, userId: req.userId });
@@ -172,6 +192,11 @@ export const updateWorkspaceProfile = async (req, res) => {
     workspace.normalizedName = normalizedName;
     workspace.profileName = profileNameRaw;
     workspace.companyDescription = companyDescriptionRaw;
+    if (profile === "Personal") {
+      workspace.monthlyExpenseLimitPersonal = monthlyExpenseLimitValue;
+    } else {
+      workspace.monthlyExpenseLimitCompany = monthlyExpenseLimitValue;
+    }
 
     if (avatarFile?.filepath) {
       if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
@@ -213,7 +238,14 @@ export const updateWorkspaceProfile = async (req, res) => {
         name: workspace.name,
         profileName: workspace.profileName || workspace.name,
         avatar: workspace.avatar || null,
-        companyDescription: workspace.companyDescription || ""
+        companyDescription: workspace.companyDescription || "",
+        profile,
+        monthlyExpenseLimit:
+          profile === "Personal"
+            ? Number(workspace.monthlyExpenseLimitPersonal || 0)
+            : Number(workspace.monthlyExpenseLimitCompany || 0),
+        monthlyExpenseLimitPersonal: Number(workspace.monthlyExpenseLimitPersonal || 0),
+        monthlyExpenseLimitCompany: Number(workspace.monthlyExpenseLimitCompany || 0)
       }
     });
   } catch (error) {

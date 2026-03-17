@@ -39,6 +39,16 @@ const workspaceSchema = new mongoose.Schema(
       trim: true,
       maxlength: 500,
       default: ""
+    },
+    monthlyExpenseLimitPersonal: {
+      type: Number,
+      min: 0,
+      default: 0
+    },
+    monthlyExpenseLimitCompany: {
+      type: Number,
+      min: 0,
+      default: 0
     }
   },
   { timestamps: true }
