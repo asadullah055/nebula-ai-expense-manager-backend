@@ -87,8 +87,9 @@ export const ensureRecurringExpenseEntriesForScope = async ({
     const sorted = [...group.entries].sort(
       (a, b) => new Date(a.entryDate).getTime() - new Date(b.entryDate).getTime()
     );
+    const first = sorted[0];
     const latest = sorted[sorted.length - 1];
-    const dayOfMonth = new Date(latest.entryDate).getUTCDate();
+    const dayOfMonth = new Date(first.entryDate).getUTCDate();
 
     let cursor = addMonthUTC(startOfMonthUTC(latest.entryDate));
     while (cursor <= currentMonthStart) {

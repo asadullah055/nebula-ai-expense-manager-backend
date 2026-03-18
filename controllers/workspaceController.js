@@ -149,8 +149,17 @@ export const updateWorkspaceProfile = async (req, res) => {
     const companyDescriptionRaw = String(normalizeValue(fields.companyDescription) || "").trim();
     const profileRaw = String(normalizeValue(fields.profile) || "").trim();
     const profile = profileRaw === "Personal" ? "Personal" : "Company";
-    const monthlyExpenseLimitRaw = String(normalizeValue(fields.monthlyExpenseLimit) || "").trim();
-    const monthlyExpenseLimitValue = monthlyExpenseLimitRaw === "" ? 0 : Number(monthlyExpenseLimitRaw);
+    const monthlyExpenseLimitField = normalizeValue(fields.monthlyExpenseLimit);
+    const monthlyExpenseLimitRaw =
+      monthlyExpenseLimitField === undefined || monthlyExpenseLimitField === null
+        ? null
+        : String(monthlyExpenseLimitField).trim();
+    const shouldUpdateMonthlyExpenseLimit = monthlyExpenseLimitRaw !== null;
+    const monthlyExpenseLimitValue = shouldUpdateMonthlyExpenseLimit
+      ? monthlyExpenseLimitRaw === ""
+        ? 0
+        : Number(monthlyExpenseLimitRaw)
+      : null;
     avatarFile = resolveSingleFile(files.avatar);
 
     if (!workspaceId) {
@@ -167,7 +176,10 @@ export const updateWorkspaceProfile = async (req, res) => {
     if (companyDescriptionRaw.length > 500) {
       return res.status(400).json({ message: "Company description must be at most 500 characters" });
     }
-    if (!Number.isFinite(monthlyExpenseLimitValue) || monthlyExpenseLimitValue < 0) {
+    if (
+      shouldUpdateMonthlyExpenseLimit &&
+      (!Number.isFinite(monthlyExpenseLimitValue) || monthlyExpenseLimitValue < 0)
+    ) {
       return res.status(400).json({ message: "Monthly expense limit must be a valid positive amount" });
     }
 
@@ -192,10 +204,12 @@ export const updateWorkspaceProfile = async (req, res) => {
     workspace.normalizedName = normalizedName;
     workspace.profileName = profileNameRaw;
     workspace.companyDescription = companyDescriptionRaw;
-    if (profile === "Personal") {
-      workspace.monthlyExpenseLimitPersonal = monthlyExpenseLimitValue;
-    } else {
-      workspace.monthlyExpenseLimitCompany = monthlyExpenseLimitValue;
+    if (shouldUpdateMonthlyExpenseLimit) {
+      if (profile === "Personal") {
+        workspace.monthlyExpenseLimitPersonal = monthlyExpenseLimitValue;
+      } else {
+        workspace.monthlyExpenseLimitCompany = monthlyExpenseLimitValue;
+      }
     }
 
     if (avatarFile?.filepath) {

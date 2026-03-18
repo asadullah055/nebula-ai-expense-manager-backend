@@ -15,6 +15,7 @@ import expenseEntryRoutes from "./routes/expenseEntryRoutes.js";
 import agentRoutes from "./routes/agentRoutes.js";
 import telegramRoutes from "./routes/telegramRoutes.js";
 import telegramLinkRoutes from "./routes/telegramLinkRoutes.js";
+import todoRoutes from "./routes/todoRoutes.js";
 
 const app = express();
 
@@ -50,6 +51,7 @@ app.use("/api/expenses", expenseEntryRoutes);
 app.use("/api/agent", agentRoutes);
 app.use("/api/telegram", telegramRoutes);
 app.use("/api/telegram-link", telegramLinkRoutes);
+app.use("/api/todo", todoRoutes);
 
 app.use((err, _req, res, _next) => {
   console.error(err.stack);
