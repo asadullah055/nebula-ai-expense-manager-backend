@@ -104,7 +104,7 @@ export const telegramWebhook = async (req, res) => {
       if (!deepLinkCode) {
         await sendTelegramMessage(
           chatId,
-          "Hey, welcome to Nebula AI Expense Manager.\n" +
+          "Hey, welcome to Nebulanexus.\n" +
             "First, link your app account by sending:\n" +
             "/link <your-code>\n\n" +
             "After linking, you can chat naturally and I will help you with your expense workflow."

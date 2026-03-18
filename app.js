@@ -34,7 +34,7 @@ app.use(cookieParser());
 app.use(passport.initialize());
 
 app.get("/", (_req, res) => {
-  res.status(200).json({ status: "ok", app: "Nebula AI Expense Manager API" });
+  res.status(200).json({ status: "ok", app: "Nebulanexus API" });
 });
 
 app.get("/api/health", (_req, res) => {

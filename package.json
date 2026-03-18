@@ -1,7 +1,7 @@
 {
   "name": "nebula-ai-expense-manager-backend",
   "version": "1.0.0",
-  "description": "Backend for Nebula AI Expense Manager",
+  "description": "Backend for Nebulanexus",
   "main": "server.js",
   "type": "module",
   "scripts": {
