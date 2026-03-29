@@ -16,11 +16,21 @@ import agentRoutes from "./routes/agentRoutes.js";
 import telegramRoutes from "./routes/telegramRoutes.js";
 import telegramLinkRoutes from "./routes/telegramLinkRoutes.js";
 import todoRoutes from "./routes/todoRoutes.js";
+import { ensureTelegramWebhookConfigured } from "./services/telegramWebhookService.js";
 
 const app = express();
+let telegramWebhookInitPromise = null;
+
+const bootstrapTelegramWebhook = () => {
+  if (telegramWebhookInitPromise) return;
+  telegramWebhookInitPromise = ensureTelegramWebhookConfigured().catch((error) => {
+    console.error("[Telegram] bootstrap failed:", error?.message || error);
+  });
+};
 
 connectDB();
 configurePassport();
+bootstrapTelegramWebhook();
 
 app.use(
   cors({
