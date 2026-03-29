@@ -83,6 +83,11 @@ const applyScopeFilter = ({ workspaceId, workspaceName, profile }) => {
 };
 
 const isMongoObjectId = (value) => /^[a-fA-F0-9]{24}$/.test(String(value || ""));
+const parsedNotificationRetentionDays = Number(process.env.NOTIFICATION_RETENTION_DAYS || 30);
+const NOTIFICATION_RETENTION_DAYS =
+  Number.isFinite(parsedNotificationRetentionDays) && parsedNotificationRetentionDays >= 0
+    ? Math.floor(parsedNotificationRetentionDays)
+    : 30;
 
 const buildUpcomingRecurringNotifications = ({ incomeRows, expenseRows, now }) => {
   const today = startOfUtcDay(now);
@@ -196,34 +201,23 @@ const syncAndListNotifications = async ({
 }) => {
   const scopeFilter = applyScopeFilter({ workspaceId, workspaceName, profile });
   const today = startOfUtcDay(now);
+  const retentionCutoff = addUtcDays(today, -NOTIFICATION_RETENTION_DAYS);
   const dedupeKeys = reminders.map((item) => item.dedupeKey);
 
-  await Notification.deleteMany({
-    userId,
-    origin: "auto",
-    ...scopeFilter,
-    dueDate: { $lt: today }
-  });
+  // await Notification.deleteMany({
+  //   userId,
+  //   origin: "auto",
+  //   ...scopeFilter,
+  //   dueDate: { $lt: retentionCutoff }
+  // });
 
   if (!dedupeKeys.length) {
-    await Notification.deleteMany({
-      userId,
-      origin: "auto",
-      ...scopeFilter
-    });
     return {
       items: [],
       count: 0,
       unreadCount: 0
     };
   }
-
-  await Notification.deleteMany({
-    userId,
-    origin: "auto",
-    ...scopeFilter,
-    dedupeKey: { $nin: dedupeKeys }
-  });
 
   for (const reminder of reminders) {
     await Notification.updateOne(
