@@ -3,11 +3,16 @@ import { telegramWebhook } from "../controllers/telegramController.js";
 
 const router = express.Router();
 
-const verifyTelegramSecret = (req, res, next) => {
-  const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (!expectedSecret) return next();
+const isPlaceholderSecret = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "your_webhook_secret" || normalized === "changeme";
+};
 
-  const providedSecret = req.headers["x-telegram-bot-api-secret-token"];
+const verifyTelegramSecret = (req, res, next) => {
+  const expectedSecret = String(process.env.TELEGRAM_WEBHOOK_SECRET || "").trim();
+  if (!expectedSecret || isPlaceholderSecret(expectedSecret)) return next();
+
+  const providedSecret = String(req.headers["x-telegram-bot-api-secret-token"] || "").trim();
   if (providedSecret !== expectedSecret) {
     return res.status(401).json({ message: "Invalid telegram webhook secret" });
   }

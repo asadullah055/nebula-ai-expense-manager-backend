@@ -131,6 +131,20 @@ export const telegramWebhook = async (req, res) => {
         return res.status(200).json({ ok: true });
       }
 
+      // Ensure a Telegram chat can be rebound to the latest verified link code owner.
+      await TelegramLink.updateMany(
+        { chatId: String(chatId), userId: { $ne: link.userId } },
+        {
+          $set: {
+            chatId: null,
+            linkedAt: null,
+            activeWorkspaceName: null,
+            activeProfile: null,
+            pendingWorkspaceSwitch: false
+          }
+        }
+      );
+
       link.chatId = String(chatId);
       link.linkCode = null;
       link.linkCodeExpiresAt = null;
